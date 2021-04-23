@@ -24,7 +24,7 @@
 #include "hw/irq.h"
 #include "hw/intc/gicv3_internal.h"
 #include "qemu/main-loop.h"
-#include "sysemu/accel.h"
+#include "qemu/accel.h"
 #include "sysemu/cpus.h"
 #include "target/arm/cpu.h"
 #include "target/arm/internals.h"

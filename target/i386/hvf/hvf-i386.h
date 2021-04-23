@@ -16,7 +16,7 @@
 #ifndef HVF_I386_H
 #define HVF_I386_H
 
-#include "sysemu/accel.h"
+#include "qemu/accel.h"
 #include "sysemu/hvf.h"
 #include "sysemu/hvf_int.h"
 #include "cpu.h"
