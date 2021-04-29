@@ -32,8 +32,16 @@
 #include "hw/mem/nvdimm.h"
 #include "migration/global_state.h"
 #include "migration/vmstate.h"
+#include "exec/confidential-guest-support.h"
+#include "hw/virtio/virtio.h"
+#include "hw/virtio/virtio-pci.h"
 
-GlobalProperty hw_compat_5_2[] = {};
+GlobalProperty hw_compat_5_2[] = {
+    { "ICH9-LPC", "smm-compat", "on"},
+    { "PIIX4_PM", "smm-compat", "on"},
+    { "virtio-blk-device", "report-discard-granularity", "off" },
+    { "virtio-net-pci", "vectors", "3"},
+};
 const size_t hw_compat_5_2_len = G_N_ELEMENTS(hw_compat_5_2);
 
 GlobalProperty hw_compat_5_1[] = {
@@ -44,6 +52,8 @@ GlobalProperty hw_compat_5_1[] = {
     { "virtio-scsi-device", "num_queues", "1"},
     { "nvme", "use-intel-id", "on"},
     { "pvpanic", "events", "1"}, /* PVPANIC_PANICKED */
+    { "pl011", "migrate-clk", "off" },
+    { "virtio-pci", "x-ats-page-aligned", "off"},
 };
 const size_t hw_compat_5_1_len = G_N_ELEMENTS(hw_compat_5_1);
 
@@ -427,24 +437,37 @@ static char *machine_get_memory_encryption(Object *obj, Error **errp)
 {
     MachineState *ms = MACHINE(obj);
 
-    return g_strdup(ms->memory_encryption);
+    if (ms->cgs) {
+        return g_strdup(object_get_canonical_path_component(OBJECT(ms->cgs)));
+    }
+
+    return NULL;
 }
 
 static void machine_set_memory_encryption(Object *obj, const char *value,
                                         Error **errp)
 {
-    MachineState *ms = MACHINE(obj);
+    Object *cgs =
+        object_resolve_path_component(object_get_objects_root(), value);
 
-    g_free(ms->memory_encryption);
-    ms->memory_encryption = g_strdup(value);
-
-    /*
-     * With memory encryption, the host can't see the real contents of RAM,
-     * so there's no point in it trying to merge areas.
-     */
-    if (value) {
-        machine_set_mem_merge(obj, false, errp);
+    if (!cgs) {
+        error_setg(errp, "No such memory encryption object '%s'", value);
+        return;
     }
+
+    object_property_set_link(obj, "confidential-guest-support", cgs, errp);
+}
+
+static void machine_check_confidential_guest_support(const Object *obj,
+                                                     const char *name,
+                                                     Object *new_target,
+                                                     Error **errp)
+{
+    /*
+     * So far the only constraint is that the target has the
+     * TYPE_CONFIDENTIAL_GUEST_SUPPORT interface, and that's checked
+     * by the QOM core
+     */
 }
 
 static bool machine_get_nvdimm(Object *obj, Error **errp)
@@ -507,20 +530,31 @@ void machine_class_allow_dynamic_sysbus_dev(MachineClass *mc, const char *type)
     QAPI_LIST_PREPEND(mc->allowed_dynamic_sysbus_devices, g_strdup(type));
 }
 
-static void validate_sysbus_device(SysBusDevice *sbdev, void *opaque)
+bool device_is_dynamic_sysbus(MachineClass *mc, DeviceState *dev)
 {
-    MachineState *machine = opaque;
-    MachineClass *mc = MACHINE_GET_CLASS(machine);
     bool allowed = false;
     strList *wl;
+    Object *obj = OBJECT(dev);
+
+    if (!object_dynamic_cast(obj, TYPE_SYS_BUS_DEVICE)) {
+        return false;
+    }
 
     for (wl = mc->allowed_dynamic_sysbus_devices;
          !allowed && wl;
          wl = wl->next) {
-        allowed |= !!object_dynamic_cast(OBJECT(sbdev), wl->value);
+        allowed |= !!object_dynamic_cast(obj, wl->value);
     }
 
-    if (!allowed) {
+    return allowed;
+}
+
+static void validate_sysbus_device(SysBusDevice *sbdev, void *opaque)
+{
+    MachineState *machine = opaque;
+    MachineClass *mc = MACHINE_GET_CLASS(machine);
+
+    if (!device_is_dynamic_sysbus(mc, DEVICE(sbdev))) {
         error_report("Option '-device %s' cannot be handled by this machine",
                      object_class_get_name(object_get_class(OBJECT(sbdev))));
         exit(1);
@@ -844,6 +878,15 @@ static void machine_class_init(ObjectClass *oc, void *data)
     object_class_property_set_description(oc, "suppress-vmdesc",
         "Set on to disable self-describing migration");
 
+    object_class_property_add_link(oc, "confidential-guest-support",
+                                   TYPE_CONFIDENTIAL_GUEST_SUPPORT,
+                                   offsetof(MachineState, cgs),
+                                   machine_check_confidential_guest_support,
+                                   OBJ_PROP_LINK_STRONG);
+    object_class_property_set_description(oc, "confidential-guest-support",
+                                          "Set confidential guest scheme to support");
+
+    /* For compatibility */
     object_class_property_add_str(oc, "memory-encryption",
         machine_get_memory_encryption, machine_set_memory_encryption);
     object_class_property_set_description(oc, "memory-encryption",
@@ -1164,6 +1207,26 @@ void machine_run_board_init(MachineState *machine)
     if (cc && cc->deprecation_note) {
         warn_report("CPU model %s is deprecated -- %s", machine->cpu_type,
                     cc->deprecation_note);
+    }
+
+    if (machine->cgs) {
+        /*
+         * With confidential guests, the host can't see the real
+         * contents of RAM, so there's no point in it trying to merge
+         * areas.
+         */
+        machine_set_mem_merge(OBJECT(machine), false, &error_abort);
+
+        /*
+         * Virtio devices can't count on directly accessing guest
+         * memory, so they need iommu_platform=on to use normal DMA
+         * mechanisms.  That requires also disabling legacy virtio
+         * support for those virtio pci devices which allow it.
+         */
+        object_register_sugar_prop(TYPE_VIRTIO_PCI, "disable-legacy",
+                                   "on", true);
+        object_register_sugar_prop(TYPE_VIRTIO_DEVICE, "iommu_platform",
+                                   "on", false);
     }
 
     machine_class->init(machine);

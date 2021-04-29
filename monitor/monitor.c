@@ -349,7 +349,7 @@ monitor_qapi_event_queue_no_reenter(QAPIEvent event, QDict *qdict)
     evconf = &monitor_qapi_event_conf[event];
     trace_monitor_protocol_event_queue(event, qdict, evconf->rate);
 
-    qemu_mutex_lock(&monitor_lock);
+    QEMU_LOCK_GUARD(&monitor_lock);
 
     if (!evconf->rate) {
         /* Unthrottled event */
@@ -391,8 +391,6 @@ monitor_qapi_event_queue_no_reenter(QAPIEvent event, QDict *qdict)
             timer_mod_ns(evstate->timer, now + evconf->rate);
         }
     }
-
-    qemu_mutex_unlock(&monitor_lock);
 }
 
 void qapi_event_emit(QAPIEvent event, QDict *qdict)
@@ -447,7 +445,7 @@ static void monitor_qapi_event_handler(void *opaque)
     MonitorQAPIEventConf *evconf = &monitor_qapi_event_conf[evstate->event];
 
     trace_monitor_protocol_event_handler(evstate->event, evstate->qdict);
-    qemu_mutex_lock(&monitor_lock);
+    QEMU_LOCK_GUARD(&monitor_lock);
 
     if (evstate->qdict) {
         int64_t now = qemu_clock_get_ns(monitor_get_event_clock());
@@ -462,8 +460,6 @@ static void monitor_qapi_event_handler(void *opaque)
         timer_free(evstate->timer);
         g_free(evstate);
     }
-
-    qemu_mutex_unlock(&monitor_lock);
 }
 
 static unsigned int qapi_event_throttle_hash(const void *key)
@@ -619,16 +615,6 @@ void monitor_data_destroy(Monitor *mon)
 void monitor_cleanup(void)
 {
     /*
-     * We need to explicitly stop the I/O thread (but not destroy it),
-     * clean up the monitor resources, then destroy the I/O thread since
-     * we need to unregister from chardev below in
-     * monitor_data_destroy(), and chardev is not thread-safe yet
-     */
-    if (mon_iothread) {
-        iothread_stop(mon_iothread);
-    }
-
-    /*
      * The dispatcher needs to stop before destroying the monitor and
      * the I/O thread.
      *
@@ -637,6 +623,11 @@ void monitor_cleanup(void)
      * eventually terminates.  qemu_aio_context is automatically
      * polled by calling AIO_WAIT_WHILE on it, but we must poll
      * iohandler_ctx manually.
+     *
+     * Letting the iothread continue while shutting down the dispatcher
+     * means that new requests may still be coming in. This is okay,
+     * we'll just leave them in the queue without sending a response
+     * and monitor_data_destroy() will free them.
      */
     qmp_dispatcher_co_shutdown = true;
     if (!qatomic_xchg(&qmp_dispatcher_co_busy, true)) {
@@ -646,6 +637,16 @@ void monitor_cleanup(void)
     AIO_WAIT_WHILE(qemu_get_aio_context(),
                    (aio_poll(iohandler_get_aio_context(), false),
                     qatomic_mb_read(&qmp_dispatcher_co_busy)));
+
+    /*
+     * We need to explicitly stop the I/O thread (but not destroy it),
+     * clean up the monitor resources, then destroy the I/O thread since
+     * we need to unregister from chardev below in
+     * monitor_data_destroy(), and chardev is not thread-safe yet
+     */
+    if (mon_iothread) {
+        iothread_stop(mon_iothread);
+    }
 
     /* Flush output buffers and destroy monitors */
     qemu_mutex_lock(&monitor_lock);
@@ -715,8 +716,8 @@ int monitor_init(MonitorOptions *opts, bool allow_hmp, Error **errp)
             return -1;
         }
         if (opts->pretty) {
-            warn_report("'pretty' is deprecated for HMP monitors, it has no "
-                        "effect and will be removed in future versions");
+            error_setg(errp, "'pretty' is not compatible with HMP monitors");
+            return -1;
         }
         monitor_init_hmp(chr, true, &local_err);
         break;

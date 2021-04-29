@@ -85,7 +85,12 @@ class VirtioGPUx86(Test):
             "-append",
             kernel_command_line,
         )
-        self.vm.launch()
+        try:
+            self.vm.launch()
+        except:
+            # TODO: probably fails because we are missing the VirGL features
+            self.cancel("VirGL not enabled?")
+
         self.wait_for_console_pattern("as init process")
         exec_command_and_wait_for_pattern(
             self, "/usr/sbin/modprobe virtio_gpu", ""
@@ -119,10 +124,11 @@ class VirtioGPUx86(Test):
         os.set_inheritable(vug_sock.fileno(), True)
 
         self._vug_log_path = os.path.join(
-            self.vm._test_dir, "vhost-user-gpu.log"
+            self.logdir, "vhost-user-gpu.log"
         )
         self._vug_log_file = open(self._vug_log_path, "wb")
-        print(self._vug_log_path)
+        self.log.info('Complete vhost-user-gpu.log file can be '
+                      'found at %s', self._vug_log_path)
 
         vugp = subprocess.Popen(
             [vug, "--virgl", "--fd=%d" % vug_sock.fileno()],
