@@ -68,7 +68,6 @@
 #include <Hypervisor/hv_vmx.h>
 #include <sys/sysctl.h>
 
-#include "exec/address-spaces.h"
 #include "hw/i386/apic_internal.h"
 #include "qemu/main-loop.h"
 #include "qemu/accel.h"
