@@ -208,7 +208,6 @@ static inline bool apic_bus_freq_is_known(CPUX86State *env)
 
 int hvf_arch_init_vcpu(CPUState *cpu)
 {
-
     X86CPU *x86cpu = X86_CPU(cpu);
     CPUX86State *env = &x86cpu->env;
 
