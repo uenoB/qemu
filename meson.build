@@ -172,7 +172,7 @@ if targetos != 'linux' and get_option('multiprocess').enabled()
 endif
 multiprocess_allowed = targetos == 'linux' and not get_option('multiprocess').disabled()
 
-m = cc.find_library('m', required: false)
+libm = cc.find_library('m', required: false)
 util = cc.find_library('util', required: false)
 winmm = []
 socket = []
@@ -1041,6 +1041,23 @@ if not get_option('fuse_lseek').disabled()
   endif
 endif
 
+# libbpf
+libbpf = dependency('libbpf', required: get_option('bpf'), method: 'pkg-config')
+if libbpf.found() and not cc.links('''
+   #include <bpf/libbpf.h>
+   int main(void)
+   {
+     bpf_object__destroy_skeleton(NULL);
+     return 0;
+   }''', dependencies: libbpf)
+  libbpf = not_found
+  if get_option('bpf').enabled()
+    error('libbpf skeleton test failed')
+  else
+    warning('libbpf skeleton test failed, disabling')
+  endif
+endif
+
 if get_option('cfi')
   cfi_flags=[]
   # Check for dependency on LTO
@@ -1140,6 +1157,7 @@ endif
 config_host_data.set('CONFIG_GTK', gtk.found())
 config_host_data.set('CONFIG_LIBATTR', have_old_libattr)
 config_host_data.set('CONFIG_LIBCAP_NG', libcap_ng.found())
+config_host_data.set('CONFIG_EBPF', libbpf.found())
 config_host_data.set('CONFIG_LIBISCSI', libiscsi.found())
 config_host_data.set('CONFIG_LIBNFS', libnfs.found())
 config_host_data.set('CONFIG_RBD', rbd.found())
@@ -1809,6 +1827,7 @@ if have_system
     'backends',
     'backends/tpm',
     'chardev',
+    'ebpf',
     'hw/9pfs',
     'hw/acpi',
     'hw/adc',
@@ -1908,7 +1927,7 @@ util_ss.add_all(trace_ss)
 util_ss = util_ss.apply(config_all, strict: false)
 libqemuutil = static_library('qemuutil',
                              sources: util_ss.sources() + stub_ss.sources() + genh,
-                             dependencies: [util_ss.dependencies(), m, glib, socket, malloc, pixman])
+                             dependencies: [util_ss.dependencies(), libm, glib, socket, malloc, pixman])
 qemuutil = declare_dependency(link_with: libqemuutil,
                               sources: genh + version_res)
 
@@ -2001,6 +2020,9 @@ subdir('accel')
 subdir('plugins')
 subdir('bsd-user')
 subdir('linux-user')
+subdir('ebpf')
+
+common_ss.add(libbpf)
 
 bsd_user_ss.add(files('gdbstub.c'))
 specific_ss.add_all(when: 'CONFIG_BSD_USER', if_true: bsd_user_ss)
@@ -2524,15 +2546,15 @@ summary(summary_info, bool_yn: true, section: 'Configurable features')
 summary_info = {}
 summary_info += {'host CPU':          cpu}
 summary_info += {'host endianness':   build_machine.endian()}
-summary_info += {'C compiler':        meson.get_compiler('c').cmd_array()[0]}
-summary_info += {'Host C compiler':   meson.get_compiler('c', native: true).cmd_array()[0]}
+summary_info += {'C compiler':        ' '.join(meson.get_compiler('c').cmd_array())}
+summary_info += {'Host C compiler':   ' '.join(meson.get_compiler('c', native: true).cmd_array())}
 if link_language == 'cpp'
-  summary_info += {'C++ compiler':      meson.get_compiler('cpp').cmd_array()[0]}
+  summary_info += {'C++ compiler':    ' '.join(meson.get_compiler('cpp').cmd_array())}
 else
   summary_info += {'C++ compiler':      false}
 endif
 if targetos == 'darwin'
-  summary_info += {'Objective-C compiler': meson.get_compiler('objc').cmd_array()[0]}
+  summary_info += {'Objective-C compiler': ' '.join(meson.get_compiler('objc').cmd_array())}
 endif
 if targetos == 'windows'
   if 'WIN_SDK' in config_host
@@ -2711,6 +2733,7 @@ summary_info += {'RDMA support':      config_host.has_key('CONFIG_RDMA')}
 summary_info += {'PVRDMA support':    config_host.has_key('CONFIG_PVRDMA')}
 summary_info += {'fdt support':       fdt_opt == 'disabled' ? false : fdt_opt}
 summary_info += {'libcap-ng support': libcap_ng.found()}
+summary_info += {'bpf support': libbpf.found()}
 # TODO: add back protocol and server version
 summary_info += {'spice support':     config_host.has_key('CONFIG_SPICE')}
 summary_info += {'rbd support':       rbd.found()}
