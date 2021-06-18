@@ -458,7 +458,9 @@ static void hvf_accel_ops_class_init(ObjectClass *oc, void *data)
     AccelOpsClass *ops = ACCEL_OPS_CLASS(oc);
 
     ops->create_vcpu_thread = hvf_start_vcpu_thread;
+#ifdef __aarch64__
     ops->kick_vcpu_thread = hvf_kick_vcpu_thread;
+#endif
 
     ops->synchronize_post_reset = hvf_cpu_synchronize_post_reset;
     ops->synchronize_post_init = hvf_cpu_synchronize_post_init;

@@ -20,9 +20,6 @@
 #include "qemu/osdep.h"
 
 #include "qemu-common.h"
-#include "sysemu/hvf.h"
-#include "sysemu/hvf_int.h"
-#include "sysemu/hw_accel.h"
 #include "x86hvf.h"
 #include "vmx.h"
 #include "vmcs.h"

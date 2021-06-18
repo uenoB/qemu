@@ -11,7 +11,6 @@
 #ifndef HVF_INT_H
 #define HVF_INT_H
 
-//#include "qemu/osdep.h"
 #ifdef __aarch64__
 #include <Hypervisor/Hypervisor.h>
 #else
@@ -61,6 +60,8 @@ int hvf_vcpu_exec(CPUState *);
 hvf_slot *hvf_find_overlap_slot(uint64_t, uint64_t);
 int hvf_put_registers(CPUState *);
 int hvf_get_registers(CPUState *);
+#ifdef __aarch64__
 void hvf_kick_vcpu_thread(CPUState *cpu);
+#endif
 
 #endif
